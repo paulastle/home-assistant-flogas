@@ -17,6 +17,7 @@ LOGIN_URL = f"{API_BASE_URL}/portal/customer/login"
 BULK_URL = f"{API_BASE_URL}/portal/bulk/data"
 USAGE_OVERVIEW_URL = f"{API_BASE_URL}/portal/usage/data-overview"
 USAGE_HISTORY_URL = f"{API_BASE_URL}/portal/usage/data"
+SUPPLY_AGREEMENT_URL = f"{API_BASE_URL}/portal/bulk/supply-agreement"
 HISTORY_DAYS = 90
 CUSTOMER_URL = f"{API_BASE_URL}/portal/customer"
 GAUGE_URL = f"{API_BASE_URL}/portal/bulk/gauge"
@@ -35,6 +36,14 @@ class FlogasAuthError(FlogasError):
 
 class FlogasConnectionError(FlogasError):
     """Flogas could not be reached or returned an unexpected response."""
+
+
+def _pence_to_pounds(value: Any) -> float | None:
+    """Convert a pence string such as "54.00" to pounds."""
+    try:
+        return round(float(value) / 100, 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_date(value: Any) -> date | None:
@@ -177,6 +186,17 @@ class FlogasAPI:
         except FlogasConnectionError as err:
             _LOGGER.debug("Customer data unavailable: %s", err)
 
+        supply: dict[str, Any] = {}
+        try:
+            supply = await self._request("GET", SUPPLY_AGREEMENT_URL)
+        except FlogasConnectionError as err:
+            _LOGGER.debug("Supply agreement unavailable: %s", err)
+        # Prices come as pence strings ("priceUnit": "P"). The portal shows the
+        # standing charge as bare pence; at ~26p it can only be per day.
+        pence = (supply.get("priceUnit") or "P").upper() == "P"
+        unit_price = _pence_to_pounds(supply.get("price")) if pence else None
+        standing_charge = _pence_to_pounds(supply.get("standingCharge")) if pence else None
+
         has_telemetry = telemetry.get("remainingPercentage") is not None
 
         history: list[dict[str, Any]] = []
@@ -219,6 +239,13 @@ class FlogasAPI:
         if days_remaining is None and level is not None and daily_pct:
             days_remaining = round(level / daily_pct)
 
+        daily_litres = capacity * daily_pct / 100 if capacity and daily_pct is not None else None
+        daily_cost = (
+            round(daily_litres * unit_price + (standing_charge or 0), 2)
+            if daily_litres is not None and unit_price is not None
+            else None
+        )
+
         return {
             "source": source,
             "remaining_percentage": level,
@@ -242,6 +269,14 @@ class FlogasAPI:
             "has_order": telemetry.get("hasOrder"),
             "balance": balance,
             "history": history,
+            "unit_price": unit_price,
+            "sales_unit": supply.get("salesUnit"),
+            "standing_charge": standing_charge,
+            "daily_cost": daily_cost,
+            "monthly_cost": round(daily_cost * 365 / 12, 2) if daily_cost is not None else None,
+            "contract_start_date": _parse_date(supply.get("contractStartDate")),
+            "contract_end_date": _parse_date(supply.get("contractEndDate")),
+            "contract_expired": supply.get("hasExpired"),
         }
 
     async def submit_gauge_reading(self, reading: int) -> dict[str, Any]:
