@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -16,6 +16,8 @@ CSRF_URL = f"{API_BASE_URL}/sanctum/csrf-cookie"
 LOGIN_URL = f"{API_BASE_URL}/portal/customer/login"
 BULK_URL = f"{API_BASE_URL}/portal/bulk/data"
 USAGE_OVERVIEW_URL = f"{API_BASE_URL}/portal/usage/data-overview"
+USAGE_HISTORY_URL = f"{API_BASE_URL}/portal/usage/data"
+HISTORY_DAYS = 90
 CUSTOMER_URL = f"{API_BASE_URL}/portal/customer"
 GAUGE_URL = f"{API_BASE_URL}/portal/bulk/gauge"
 
@@ -107,7 +109,12 @@ class FlogasAPI:
         _LOGGER.debug("Logged in to Flogas")
 
     async def _request(
-        self, method: str, url: str, json: dict | None = None, retry: bool = True
+        self,
+        method: str,
+        url: str,
+        json: dict | None = None,
+        retry: bool = True,
+        params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Make an authenticated request, logging in again once if needed."""
         if self._token is None:
@@ -119,14 +126,14 @@ class FlogasAPI:
 
         try:
             async with self._session.request(
-                method, url, json=json, headers=headers, timeout=TIMEOUT
+                method, url, json=json, params=params, headers=headers, timeout=TIMEOUT
             ) as response:
                 if response.status in AUTH_STATUSES:
                     self._token = None
                     if not retry:
                         raise FlogasAuthError(f"Not authorised: {response.status}")
                     _LOGGER.debug("Session expired, logging in again")
-                    return await self._request(method, url, json, retry=False)
+                    return await self._request(method, url, json, False, params)
                 if response.status != 200:
                     raise FlogasConnectionError(f"{url} returned {response.status}")
                 result = await response.json()
@@ -171,6 +178,26 @@ class FlogasAPI:
             _LOGGER.debug("Customer data unavailable: %s", err)
 
         has_telemetry = telemetry.get("remainingPercentage") is not None
+
+        history: list[dict[str, Any]] = []
+        if has_telemetry:
+            today = date.today()
+            try:
+                usage = await self._request(
+                    "GET",
+                    USAGE_HISTORY_URL,
+                    params={
+                        "from": (today - timedelta(days=HISTORY_DAYS)).isoformat(),
+                        "to": today.isoformat(),
+                    },
+                )
+                history = [
+                    {"date": day.isoformat(), "level": item["level"]}
+                    for item in usage.get("usage") or []
+                    if (day := _parse_date(item.get("date"))) and item.get("level") is not None
+                ]
+            except FlogasConnectionError as err:
+                _LOGGER.debug("Telemetry history unavailable: %s", err)
         if has_telemetry:
             source = SOURCE_TELEMETRY
             level = telemetry.get("remainingPercentage")
@@ -214,6 +241,7 @@ class FlogasAPI:
             "next_delivery_date": _parse_date(telemetry.get("nextDeliveryDate")),
             "has_order": telemetry.get("hasOrder"),
             "balance": balance,
+            "history": history,
         }
 
     async def submit_gauge_reading(self, reading: int) -> dict[str, Any]:

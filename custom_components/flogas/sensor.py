@@ -41,6 +41,8 @@ SENSOR_TYPES: tuple[FlogasSensorEntityDescription, ...] = (
             "source": data.get("source"),
             "last_reading_date": data.get("last_reading_date"),
             "tank_capacity_litres": data.get("tank_capacity"),
+            # Daily telemetry readings, oldest first, for history graphs
+            "history": data.get("history"),
         },
     ),
     FlogasSensorEntityDescription(
