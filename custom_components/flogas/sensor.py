@@ -210,6 +210,9 @@ class FlogasSensor(CoordinatorEntity[FlogasDataUpdateCoordinator], SensorEntity)
 
     entity_description: FlogasSensorEntityDescription
     _attr_has_entity_name = True
+    # The history list changes daily and is already held by Flogas; keep it
+    # out of the recorder database.
+    _unrecorded_attributes = frozenset({"history"})
 
     def __init__(
         self,

@@ -207,8 +207,10 @@ class FlogasAPI:
                     "GET",
                     USAGE_HISTORY_URL,
                     params={
-                        "from": (today - timedelta(days=HISTORY_DAYS)).isoformat(),
-                        "to": today.isoformat(),
+                        # The portal sends DD/MM/YYYY; ISO dates are ignored and
+                        # the API falls back to roughly the last month.
+                        "from": (today - timedelta(days=HISTORY_DAYS)).strftime("%d/%m/%Y"),
+                        "to": today.strftime("%d/%m/%Y"),
                     },
                 )
                 history = [
